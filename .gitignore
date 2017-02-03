@@ -1,3 +1,7 @@
+# DMW,31JAN2017,Nedit uses *.bck for backups.
+#               Q:  should *.del@* pending delete files also be ignored?
+*.bck
+
 # Compiled Object files, Static and Dynamic libs (Shared Objects)
 *.o
 *.a
