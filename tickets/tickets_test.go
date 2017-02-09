@@ -92,24 +92,24 @@ func TestNextTicket(tst *testing.T) {
 
 func TestSellAndCheckAvailabilityAndPrice(tst *testing.T) {
 	atomic.StoreInt32(&seatsSold[1][2], 0)
-	penneys, soldOut := checkAvailabilityAndPrice(1, 2)
+	pennies, soldOut := checkAvailabilityAndPrice(1, 2)
 	ss12 := atomic.LoadInt32(&seatsSold[1][2])
-	if penneys != 1000 || soldOut || ss12 != 1 {
-		tst.Errorf("checkAvailabilityAndPrice(1,2) with seatsSold[1][2] = 0, returned price=%d,soldOut=%t,seatsSold[1][2]=%d, expected 1000,false,1", penneys, soldOut, ss12)
+	if pennies != 1000 || soldOut || ss12 != 1 {
+		tst.Errorf("checkAvailabilityAndPrice(1,2) with seatsSold[1][2] = 0, returned price=%d,soldOut=%t,seatsSold[1][2]=%d, expected 1000,false,1", pennies, soldOut, ss12)
 	}
 
 	atomic.StoreInt32(&seatsSold[1][2], int32(maxSeats-1))
-	penneys, soldOut = checkAvailabilityAndPrice(1, 2)
+	pennies, soldOut = checkAvailabilityAndPrice(1, 2)
 	ss12 = atomic.LoadInt32(&seatsSold[1][2])
-	if penneys != 1000 || soldOut || ss12 != int32(maxSeats) {
-		tst.Errorf("checkAvailabilityAndPrice(1,2) with seatsSold[1][2] = maxSeats - 1 = %d, returned price=%d,soldOut=%t,seatsSold[1][2]=%d, expected 1000,false,(maxSeats=%d)", maxSeats-1, penneys, soldOut, ss12, maxSeats)
+	if pennies != 1000 || soldOut || ss12 != int32(maxSeats) {
+		tst.Errorf("checkAvailabilityAndPrice(1,2) with seatsSold[1][2] = maxSeats - 1 = %d, returned price=%d,soldOut=%t,seatsSold[1][2]=%d, expected 1000,false,(maxSeats=%d)", maxSeats-1, pennies, soldOut, ss12, maxSeats)
 	}
 
 	atomic.StoreInt32(&seatsSold[1][2], int32(maxSeats))
-	penneys, soldOut = checkAvailabilityAndPrice(1, 2)
+	pennies, soldOut = checkAvailabilityAndPrice(1, 2)
 	ss12 = atomic.LoadInt32(&seatsSold[1][2])
 	if !soldOut || ss12 != int32(maxSeats+1) {
-		tst.Errorf("checkAvailabilityAndPrice(1,2) with seatsSold[1][2] = 0, returned price=%d,soldOut=%t,seatsSold[1][2]=%d, expected <unreliable_value>,true,(maxSeats+1=%d)", penneys, soldOut, ss12, maxSeats+1)
+		tst.Errorf("checkAvailabilityAndPrice(1,2) with seatsSold[1][2] = 0, returned price=%d,soldOut=%t,seatsSold[1][2]=%d, expected <unreliable_value>,true,(maxSeats+1=%d)", pennies, soldOut, ss12, maxSeats+1)
 	}
 
 	sstemp := int32(maxSeats - 3)
@@ -152,8 +152,8 @@ func TestSellAndCheckAvailabilityAndPrice(tst *testing.T) {
 		tst.Errorf("First call sold %d, expected 2;  second call sold %d, expected 1.", len(receipt1.ItemsSold), len(receipt2.ItemsSold))
 	}
 	for i, d := range receipt1.ItemsSold {
-		if d.Desc != "Movie 1, Showing 2" || d.Penneys != 1000 {
-			tst.Errorf("Line item %d is %s %d, expected %s %d", i, d.Desc, d.Penneys, "Movie 1, Showing 2", 1000)
+		if d.Desc != "Movie 1, Showing 2" || d.Pennies != 1000 {
+			tst.Errorf("Line item %d is %s %d, expected %s %d", i, d.Desc, d.Pennies, "Movie 1, Showing 2", 1000)
 		}
 	}
 	if receipt1.Total != len(receipt1.ItemsSold)*1000 || receipt2.Total != len(receipt2.ItemsSold)*1000 {

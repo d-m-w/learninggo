@@ -82,6 +82,7 @@ var L *log.Logger
 // main starts and runs the model.
 // The size and runtime defaults (see const section, above) can be overridden
 // by cmd.line options:
+//   -?
 //   -a <average delay (nDelay)>
 //   -c <MaxExchanges>
 //   -m <MaxMovies>
@@ -113,6 +114,7 @@ func main() {
 
 	rand.Seed(time.Now().UnixNano())
 
+	bpHelp := flag.Bool("?", false, "Display this usage info")
 	dpAvgDelay := flag.Duration("a", nDelay, "average delay between transactions at the same window (see Go doc for time.ParseDuration)")
 	ipExchanges := flag.Int("c", MaxExchanges, "number of exchanges the cafeteria can make before running out of soda (Must match sample_server)")
 	ipMovies := flag.Int("m", MaxMovies, "number of movies the theatre can show (Must match sample_server)")
@@ -123,6 +125,12 @@ func main() {
 	ipMax := flag.Int("x", nMax, "maximum number of tickets which may be purchased in one transaction")
 
 	flag.Parse()
+
+	if *bpHelp {
+		fmt.Fprintf(os.Stderr, "%s is used to run a theatre model.\nIt expects a tickets server to be running on localhost:1811.\nOptions:\n\n", os.Args[0])
+		flag.PrintDefaults()
+		os.Exit(2)
+	}
 
 	if *dpAvgDelay < 0 {
 		L.Fatalf("Startup failed:  -a (average inter-txn delay) must not be negative")

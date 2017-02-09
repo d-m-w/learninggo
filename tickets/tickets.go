@@ -27,13 +27,13 @@ type Receipt struct {
 	Time      interface{}
 	Window    int
 	ItemsSold []RItem
-	Total     int // total amount for all items, in penneys
+	Total     int // total amount for all items, in pennies
 } // Receipt
 
 // One line of the ItemsSold slice in a Receipt
 type RItem struct {
 	Desc    string
-	Penneys int // amount, in penneys
+	Pennies int // amount, in pennies
 } // RItem
 
 // A ticket record.
@@ -343,8 +343,8 @@ func readTicket(tickNum int) (Ticket, error) {
 //
 // Returns:
 //
-// priceInPenneys
-//    The price of the ticket as an int, in penneys (to keep FP roundoff out of
+// priceInPennies
+//    The price of the ticket as an int, in pennies (to keep FP roundoff out of
 //    your wallet!).  If the showing is sold out, then this price may not be
 //    valid.
 // soldOut
@@ -355,12 +355,12 @@ func readTicket(tickNum int) (Ticket, error) {
 //
 // Note:  if the processing of this ticket request fails after
 // checkAvailabilityAndPrice(), then the seat in that showing may go unsold.
-func checkAvailabilityAndPrice(m int, s int) (priceInPenneys int, soldOut bool) {
-	priceInPenneys = 1000 // Initially, all tickets cost $10.00
+func checkAvailabilityAndPrice(m int, s int) (priceInPennies int, soldOut bool) {
+	priceInPennies = 1000 // Initially, all tickets cost $10.00
 
 	consumedSeatsIncludingThisOne := atomic.AddInt32(&seatsSold[m][s], 1)
 
-	return priceInPenneys, (int(consumedSeatsIncludingThisOne) > maxSeats)
+	return priceInPennies, (int(consumedSeatsIncludingThisOne) > maxSeats)
 } // checkAvailabilityAndPrice
 
 // updateTicketExchange uses the supplied Ticket struct to update the product
@@ -523,7 +523,7 @@ func Sell(window int, ticketRequests [][2]int, paymentInfo map[string]interface{
 		return tickets, receipt, errors.New("Sell failed:  ticketing system is down.")
 	}
 
-	var totalprice = 0 // in penneys
+	var totalprice = 0 // in pennies
 	tickets = make([]Ticket, len(ticketRequests), len(ticketRequests))
 	receipt = Receipt{Time: localTime, Window: window}
 
@@ -559,7 +559,7 @@ func Sell(window int, ticketRequests [][2]int, paymentInfo map[string]interface{
 			if window == 1 {
 				t.Goodies = true
 			}
-			item := RItem{Desc: fmt.Sprintf("Movie %d, Showing %d", t.Movie, t.Showing), Penneys: t.Price}
+			item := RItem{Desc: fmt.Sprintf("Movie %d, Showing %d", t.Movie, t.Showing), Pennies: t.Price}
 			receipt.ItemsSold = append(receipt.ItemsSold, item)
 		}
 		tickets[i] = t
