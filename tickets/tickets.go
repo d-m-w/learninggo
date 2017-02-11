@@ -56,7 +56,7 @@ const (
 )
 
 // L is the logger to use.
-var L log.Logger
+var L *log.Logger
 
 // totExchanges is the number of exchanges which have been done.
 var totExchanges int
@@ -168,9 +168,15 @@ func Init(parmL *log.Logger, parmMaxExchanges int, parmMaxMovies int, parmMaxSho
 	// Not sure if this is really the right way to do this, but it doesn't
 	// APPEAR that sync.Once.Do() returns anything ...
 	var initErr error
+	if L != nil {
+		L.Printf("Init:  initGate initial state: %s, %#v\n", initGate, initGate)
+	}
 	initGate.Do(func() {
 		initErr = initOnce(parmL, parmMaxExchanges, parmMaxMovies, parmMaxShowings, parmMaxSeats, parmMaxWindows)
 	})
+	if L != nil {
+		L.Printf("Init:  initGate final state:  %s, %#v\n", initGate, initGate)
+	}
 	return initErr
 } // Init
 
@@ -180,27 +186,38 @@ func initOnce(parmL *log.Logger, parmMaxExchanges int, parmMaxMovies int, parmMa
 	if parmL == nil {
 		return errors.New("Missing Logger")
 	}
-	L = *parmL
+	L = parmL
+	L.Printf("initOnce:  logger L configured.\n") // Unfortunately, no way to print anything useful about it.
+
 	maxExchanges = parmMaxExchanges
 	if maxExchanges < 0 {
 		return errors.New("MaxExchanges " + strconv.Itoa(maxExchanges) + " must not be negative")
 	}
+	L.Printf("initOnce:  maxExchanges : %d\n", maxExchanges)
+
 	maxMovies = parmMaxMovies
 	if maxMovies < 1 {
 		return errors.New("MaxMovies " + strconv.Itoa(maxMovies) + " must be greater than zero")
 	}
+	L.Printf("initOnce:  maxMovies    : %d\n", maxMovies)
+
 	maxShowings = parmMaxShowings
 	if maxShowings < 1 {
 		return errors.New("MaxShowings " + strconv.Itoa(maxMovies) + " must be greater than zero")
 	}
+	L.Printf("initOnce:  maxShowings  : %d\n", maxShowings)
+
 	maxSeats = parmMaxSeats
 	if maxSeats < 1 {
 		return errors.New("MaxSeats " + strconv.Itoa(maxMovies) + " must be greater than zero")
 	}
+	L.Printf("initOnce:  maxSeats     : %d\n", maxSeats)
+
 	maxWindows = parmMaxWindows
 	if maxWindows < 1 {
 		return errors.New("MaxWindows " + strconv.Itoa(maxMovies) + " must be greater than zero")
 	}
+	L.Printf("initOnce:  maxWindows   : %d\n", maxWindows)
 
 	seatsSold = make([][]int32, maxMovies, maxMovies)
 	for i, _ := range seatsSold {
@@ -213,7 +230,7 @@ func initOnce(parmL *log.Logger, parmMaxExchanges int, parmMaxMovies int, parmMa
 	go ticketProducer(ticketRoll)
 
 	salesOpen = true
-	L.Printf("Ticketing system open for sales and exchanges at %s.", time.Now().Format("2006-01-02t15-04-05z-0700"))
+	L.Printf("initOnce:  Ticketing system open for sales and exchanges at %s.", time.Now().Format("2006-01-02t15-04-05z-0700"))
 	return nil
 } // initOnce
 

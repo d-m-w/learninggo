@@ -7,6 +7,17 @@ You can use it if you want to make 'tickets' available as a stand-alone Web
 service.  It will then have a JSON interface.
 
 The following URLs are supported:
+    /tickets/init/
+        This URL is accessed with POST.  The request is sent in JSON format:
+	    {
+	        "MaxExchanges"   : <max.# exchanges>,
+		"MaxMovies"      : <max.# movies>,
+		"MaxShowings"    : <max.# showings per movie per day>,
+		"MaxSeats"       : <max.# seats per showing>,
+		"MaxWindows"     : <max.# open ticket windows>,
+            }
+	If an error occurs, it is sent back in the response body.
+	HTTP 204 (http.StatusNoContent) or 400 (http.StatusBadRequest).
     /tickets/sell/<window_number>
         This URL is accessed with POST.  The request is sent in JSON format:
             {
@@ -19,10 +30,10 @@ The following URLs are supported:
                 "tickets"        :   [ { <struct Ticket expressed as a JSON map> }, ... ],
                 "receipt"        :   { <struct Receipt expressed as a JSON map> }
             }
-	and you get HTTP 200 on success.
+	and you get HTTP 200 (http.StatusOK) on success.
     /tickets/exchange/<ticket_number>/<old_goodie>/<new_goodie>
         There is no additional payload with this URL.  Use GET or POST.
-        There is no reply data (get HTTP 204 on success).
+        There is no reply data (get HTTP 204 (http.StatusNoContent) on success).
 
 See the doc. in tickets.go for application details.
 
@@ -33,7 +44,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -47,19 +57,7 @@ import (
 )
 
 const (
-
-	// ATTENTION!  constants named Max* are shared with theatre and must be kept in sync.
-	//             If overridden by a cmd.line option, then the SAME option must be given
-	//             to theatre when it is started.  Unspeakable horrors may result,
-	//             elsewise.
-
 	ServerPort = "1811" // for tickets service on localhost
-
-	MaxExchanges = 200 // items available for exchange
-	MaxMovies    = 5   // in the theatre
-	MaxShowings  = 4   // per movie
-	MaxSeats     = 100 // per movie showing
-	MaxWindows   = 2   // for selling tickets
 
 	LogFileBase = "log/tickets."
 )
@@ -67,13 +65,9 @@ const (
 var L *log.Logger
 
 // main starts and runs the sample tickets server.
-// The size and runtime defaults (see const section, above) can be overridden
-// by cmd.line options:
-//   -c <MaxExchanges>
-//   -m <MaxMovies>
-//   -s <MaxSeats>
-//   -h <MaxShowings>
-//   -w <MaxWindows>
+// As of Issue # 4, all configuration is supplied by the client,
+// whose first request must be 'init' (all other requests will
+// fail with an error, until init is requested).
 func main() {
 	logFileName := LogFileBase + time.Now().Format("2006-01-02t15-04-05z-0700")
 	logFile, logErr := os.Create(logFileName)
@@ -91,22 +85,58 @@ func main() {
 
 	// End common logging init.
 
-	ipExchanges := flag.Int("c", MaxExchanges, "number of exchanges the cafeteria can make before running out of soda (Must match theatre model)")
-	ipMovies := flag.Int("m", MaxMovies, "number of movies the theatre can show (Must match theatre model)")
-	ipSeats := flag.Int("e", MaxSeats, "number of seats available for each movie showing (Must match theatre model)")
-	ipShowings := flag.Int("h", MaxShowings, "number of times each movie is shown, per day (Must match theatre model)")
-	ipWindows := flag.Int("w", MaxWindows, "number of open ticket windows (Must match theatre model)")
-
-	flag.Parse()
-
-	if err := tickets.Init(L, *ipExchanges, *ipMovies, *ipShowings, *ipSeats, *ipWindows); err != nil {
-		L.Fatalf("Startup failed:  ticket system initialization failed:  %v\n", err)
-	}
-
+	http.HandleFunc("/tickets/init/", initTicketService)
 	http.HandleFunc("/tickets/sell/", sellTickets)
 	http.HandleFunc("/tickets/exchange/", handleExchange)
 	L.Fatal(http.ListenAndServe("localhost:"+ServerPort, nil))
 } // main
+
+// initTicketService is an adapter between the http Handler protocol and the
+// ticketing system's Init function.  The URL format is:
+//     /tickets/init/
+// and the request body must contain the configuration parameters in JSON format:
+//	    {
+//	        "MaxExchanges"   : <max.# exchanges>,
+//		"MaxMovies"      : <max.# movies>,
+//		"MaxShowings"    : <max.# showings per movie per day>,
+//		"MaxSeats"       : <max.# seats per showing>,
+//		"MaxWindows"     : <max.# open ticket windows>,
+//          }
+// There is no response body on success, so you get HTTP 204 (http.StatusNoContent)
+// Failures get HTTP 400 (http.StatusBadRequest)
+func initTicketService(w http.ResponseWriter, rqst *http.Request) {
+
+	// Init all fields to invalid values.
+	// This means that initialization will fail, unless the
+	// client provides good data for all supported fields.
+	requestData := struct {
+		MaxExchanges int // <max.# exchanges>,
+		MaxMovies    int // <max.# movies>,
+		MaxShowings  int // <max.# showings per movie per day>,
+		MaxSeats     int // <max.# seats per showing>,
+		MaxWindows   int // <max.# open ticket windows>,
+	}{-1, -1, -1, -1, -1}
+
+	L.Printf("initTicketService called for %v\n", rqst.URL)
+
+	jparser := json.NewDecoder(rqst.Body)
+
+	if err := jparser.Decode(&requestData); err != nil {
+		L.Printf("Request '%s' failed:  data not in JSON format:  %v\n", rqst.URL.Path, err)
+		http.Error(w, "data not in JSON format", http.StatusBadRequest)
+		return
+	}
+
+	if err := tickets.Init(L, requestData.MaxExchanges, requestData.MaxMovies, requestData.MaxShowings, requestData.MaxSeats, requestData.MaxWindows); err != nil {
+		L.Printf("initTicketService failed:  ticket system initialization failed:  %v\n", err)
+		http.Error(w, fmt.Sprintf("%v", err), http.StatusBadRequest)
+		return
+	}
+
+	http.Error(w, "initialized", http.StatusNoContent)
+	return
+
+} // initTicketService
 
 // handleExchange is an adapter between the http Handler protocol and the
 // ticketing system's Exchange function.  The URL format is:

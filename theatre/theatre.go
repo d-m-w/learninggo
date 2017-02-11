@@ -144,10 +144,8 @@ func main() {
 		L.Fatalf("Startup failed:  -x (max tickets/txn) must be at least 1")
 	}
 
-	L.Printf("\n!!!TODO!!!  Need to have the server wait to init the tickets system until we call it.  Or, we need a way to query the configuration from the running server, when WE start up.  For now, you must be sure that the startup parameters of the server and the theatre match.\n\n")
-	// prevent unused variable complaints, until the init problem is straightened out:
-	runtime.KeepAlive(ipExchanges)
-	runtime.KeepAlive(ipSeats)
+	// initBackend succeeds or dies, no need to return error
+	initBackend(*ipExchanges, *ipMovies, *ipShowings, *ipSeats, *ipWindows)
 
 	chTracker := make(chan interface{}, 5) // All message TO tracker go over this channel (msgTicketSale, msgExchange, and some msgDone)
 	chStopWin := make(chan msgStop)        // Used to broadcast shutdown order to ticket windows, by closing the channel, as advised by Donovan & Kernighan, pg 251
@@ -206,6 +204,43 @@ shutdnloop:
 	L.Printf("SHUTDOWN - All Goroutines have exited.  Shutting down.\n")
 	return
 } // main
+
+// initBackend starts up the backend tickets system.
+// Since this is critical to the raison d'etre of theatre,
+// it uses fmt.Fatalf to report any failures.
+func initBackend(mExch, mMov, mShow, mSeats, mWins int) {
+	rqst := struct {
+		MaxExchanges int
+		MaxMovies    int
+		MaxShowings  int
+		MaxSeats     int
+		MaxWindows   int
+	}{mExch, mMov, mShow, mSeats, mWins}
+
+	url := fmt.Sprintf("%s/init/", ticketServer)
+
+	L.Printf("Creating tickets server initialization request:\n%+v\n", rqst)
+	// convert rqst to JSON format
+	// make HTTP POST request to tickets/init/
+	// if successful (HTTP 204),
+	//     continue startup
+	// if unsuccessful, log it and die
+	rqstJSON, err := json.Marshal(rqst)
+	if err != nil {
+		L.Fatalf("Theatre startup failed:  unable to convert rqst to JSON format:  %v\n", err)
+	}
+	L.Printf("POSTing initialization request to %s\n", url)
+	response, err := http.Post(url, "application/json", bytes.NewReader(rqstJSON))
+	L.Printf("Received response to initialization request:\n%+v\n\n%#v\n", response, response)
+	switch {
+	case err != nil:
+		L.Fatalf("Tickets server initialization failed:\n\turl=%s\nerr=%v\n", url, err)
+	case response.StatusCode != http.StatusNoContent:
+		L.Fatalf("Tickets server initialization failed with status %s\n", response.Status)
+	default:
+		L.Printf("Tickets server initialization succeeded.  Continuing theatre startup ...\n")
+	}
+} // initBackend
 
 // tracker is run as a goroutine.
 // It tracks the activity of the cafeteria and ticket windows.
