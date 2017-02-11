@@ -147,6 +147,9 @@ func main() {
 	// initBackend succeeds or dies, no need to return error
 	initBackend(*ipExchanges, *ipMovies, *ipShowings, *ipSeats, *ipWindows)
 
+	retCd := 0                                                                                                  // Now that the server is started, need a default return code for stopping it.
+	eojMsg := "theatre started the server and is continuing to initialie.\nShutdown not expected at this time." // ... and a default shutdown message.
+
 	chTracker := make(chan interface{}, 5) // All message TO tracker go over this channel (msgTicketSale, msgExchange, and some msgDone)
 	chStopWin := make(chan msgStop)        // Used to broadcast shutdown order to ticket windows, by closing the channel, as advised by Donovan & Kernighan, pg 251
 	chDone := make(chan interface{})       // Passes msgDone back to main()
@@ -201,8 +204,19 @@ shutdnloop:
 		default: // ignore it
 		}
 	}
-	L.Printf("SHUTDOWN - All Goroutines have exited.  Shutting down.\n")
-	return
+	L.Printf("SHUTDOWN - All Goroutines have exited.  Shutting down server.\n")
+	eojMsg = "SHUTDOWN - theatre is shutting down.\nAll Goroutines have exited.\nShutting down server and exiting."
+	url := fmt.Sprintf("%s/stop/%d/", ticketServer, retCd)
+	L.Printf("SHUTDOWN - main POSTing server shutdown request to %s\n", url)
+	response, err := http.Post(url, "text/plain", strings.NewReader(eojMsg))
+	L.Printf("SHUTDOWN - main received response:\n%+v\n\n%#v\n", response, response)
+	if err != nil {
+		L.Printf("SHUTDOWN - main received error:  %v\n", err)
+		if retCd == 0 {
+			retCd = 40 // indicate remote error.
+		}
+	}
+	os.Exit(retCd)
 } // main
 
 // initBackend starts up the backend tickets system.

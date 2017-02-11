@@ -7,7 +7,8 @@ You can use it if you want to make 'tickets' available as a stand-alone Web
 service.  It will then have a JSON interface.
 
 The following URLs are supported:
-    /tickets/init/
+
+    POST  /tickets/init/
         This URL is accessed with POST.  The request is sent in JSON format:
 	    {
 	        "MaxExchanges"   : <max.# exchanges>,
@@ -18,7 +19,8 @@ The following URLs are supported:
             }
 	If an error occurs, it is sent back in the response body.
 	HTTP 204 (http.StatusNoContent) or 400 (http.StatusBadRequest).
-    /tickets/sell/<window_number>
+
+    POST  /tickets/sell/<window_number>
         This URL is accessed with POST.  The request is sent in JSON format:
             {
                 "TicketRequests" : [ [ <movie#>, <showning#> ], ... ],
@@ -31,9 +33,15 @@ The following URLs are supported:
                 "receipt"        :   { <struct Receipt expressed as a JSON map> }
             }
 	and you get HTTP 200 (http.StatusOK) on success.
-    /tickets/exchange/<ticket_number>/<old_goodie>/<new_goodie>
+
+    GET or POST  /tickets/exchange/<ticket_number>/<old_goodie>/<new_goodie>
         There is no additional payload with this URL.  Use GET or POST.
         There is no reply data (get HTTP 204 (http.StatusNoContent) on success).
+
+    POST  /tickets/stop/<optional_return_code>
+        This URL is access with POST.  A text/plain request body is optional.
+	If a non-empty request body is present, it is emitted  *AS-IS*  to
+	the log (i.e. it is NOT in JSON format).
 
 See the doc. in tickets.go for application details.
 
@@ -45,6 +53,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -88,6 +97,7 @@ func main() {
 	http.HandleFunc("/tickets/init/", initTicketService)
 	http.HandleFunc("/tickets/sell/", sellTickets)
 	http.HandleFunc("/tickets/exchange/", handleExchange)
+	http.HandleFunc("/tickets/stop/", stopTicketService)
 	L.Fatal(http.ListenAndServe("localhost:"+ServerPort, nil))
 } // main
 
@@ -260,3 +270,53 @@ func sellTickets(w http.ResponseWriter, rqst *http.Request) {
 	// Note:  http.ResponseWriter doesn't have a Close() method, so can't do that.
 	return
 } // sellTickets
+
+// stopTicketService shuts down the tickets server.
+//
+// URLs are accessed with HTTP POST.  URL format
+//   /tickets/stop/<optional_return_code>
+//
+// Request body is optional.
+// If present, it must be unescaped
+//   Content-Type: text/plain
+// Any such data will be copied as-is to the server's log.
+//bytes
+// If a URL parsing error occurs, then HTTP 400 or 500 is returned.
+//
+// HTTP 204 (http.StatusNoContent) means that no errors were found
+// and os.Exit(<optional_return_code_or_0> is about to be issued.
+// It does not guarantee that os.Exit will succeed.
+func stopTicketService(w http.ResponseWriter, rqst *http.Request) {
+	const (
+		PPRetCd = 3 // where's the Window# in the URL.Path?
+	)
+	var requestData bytes.Buffer
+	var retCd int
+
+	L.Printf("stopTicketService called for %v\n", rqst.URL)
+
+	requestBytes, err := ioutil.ReadAll(rqst.Body)
+
+	if err != nil {
+		L.Printf("stopTicketService request '%s' substituting default message:  unable to read message text from rqst.Body:  %v\n", rqst.URL.Path, err)
+		requestData = *bytes.NewBufferString("<client shutdown message unreadable>")
+	} else {
+		requestData = *bytes.NewBuffer(requestBytes)
+	}
+
+	switch pathParts := strings.Split(rqst.URL.Path, "/"); {
+	case len(pathParts) > PPRetCd:
+		retCd, err = strconv.Atoi(pathParts[PPRetCd])
+		if err != nil {
+			L.Printf("stopTicketService request '%s' failed:  rawRetCd number invalid:  %v\n", rqst.URL.Path, err)
+			http.Error(w, "server return code not an integer", http.StatusBadRequest)
+			return
+		}
+	default:
+		retCd = 0
+	}
+
+	L.Printf("stopTicketService shuttting down tickets server with return code %d\n%s\n", retCd, requestData)
+	os.Exit(retCd)
+
+} // stopTicketService
