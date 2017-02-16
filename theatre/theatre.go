@@ -293,9 +293,16 @@ func tracker(chTracker chan interface{}, chStopWin chan msgStop, chDone chan int
 	var chTrackerOpen = true
 	var cafeteriaClosed = false
 	var exchangeCtr = 0
-	var ticketsSold = make([][]int, movies+1, movies+1) // the last one will be used for totals for each showing, and a grand total
+
+	// In each of these tables, the last position in each row and column
+	// will be used for totals for each showing and movie, and a grand total
+	var ticketsSold = make([][]int, movies+1, movies+1)
 	for i, _ := range ticketsSold {
-		ticketsSold[i] = make([]int, showings+1, showings+1) // the last one will be used for totals for the movie
+		ticketsSold[i] = make([]int, showings+1, showings+1)
+	}
+	var soldOuts = make([][]int, movies+1, movies+1)
+	for i, _ := range soldOuts {
+		soldOuts[i] = make([]int, showings+1, showings+1)
 	}
 
 	L.Printf("tracker started ... entering main event/wait loop ...\n")
@@ -319,10 +326,17 @@ mainloop:
 			case msgTicketSale:
 				L.Printf("Processing ticket sales notification:  %+v\n", x)
 				for _, t := range x.(msgTicketSale).ticks {
-					ticketsSold[t.Movie][t.Showing]++ // the particular movie and showing
-					ticketsSold[t.Movie][showings]++  // the movie subtotal
-					ticketsSold[movies][t.Showing]++  // the showing subtotal
-					ticketsSold[movies][showings]++   // the grand total
+					if t.SoldOut {
+						soldOuts[t.Movie][t.Showing]++ // the particular movie and showing
+						soldOuts[t.Movie][showings]++  // the movie subtotal
+						soldOuts[movies][t.Showing]++  // the showing subtotal
+						soldOuts[movies][showings]++   // the grand total
+					} else {
+						ticketsSold[t.Movie][t.Showing]++ // the particular movie and showing
+						ticketsSold[t.Movie][showings]++  // the movie subtotal
+						ticketsSold[movies][t.Showing]++  // the showing subtotal
+						ticketsSold[movies][showings]++   // the grand total
+					}
 				}
 			case msgDone:
 				if strings.Contains(strings.ToLower(x.(msgDone).head.from), "cafeteria") {
@@ -364,30 +378,36 @@ mainloop:
 
 	fmt.Fprintf(summaryReport, `Ticket and Exchange Report                             %s
 
-%d Exchanges performed
-
-Ticket Sales per Movie and Showing
-             `, summaryReportHead, exchangeCtr)
-	for i := 0; i < movies; i++ {
-		fmt.Fprintf(summaryReport, "Movie %2d  ", i) // Do NOT use a newline here!
-	}
-	fmt.Fprintln(summaryReport, "All movies")
-	for j := 0; j <= showings; j++ {
-		if j == showings {
-			fmt.Fprintf(summaryReport, "All showings ") // NO NL
-		} else {
-			fmt.Fprintf(summaryReport, "Showing %2d   ", j) // NO NL
-		}
-		for i := 0; i <= movies; i++ {
-			fmt.Fprintf(summaryReport, "%8d  ", ticketsSold[i][j])
-		}
-		fmt.Fprintln(summaryReport, "")
-	}
+%d Exchanges performed`, summaryReportHead, exchangeCtr)
+	summarize(summaryReport, "\nTicket Sales per Movie and Showing", ticketsSold, movies, showings)
+	summarize(summaryReport, "\n\nMissed Sales Due to Sellouts per Movie and Showing", soldOuts, movies, showings)
 
 	chDone <- msgDone{head: msgHeader{at: time.Now(), from: "tracker"}}
 	//runtime.Goexit   ---   getting strange error "runtime.Goexit evaluated but not used"
 
 } // tracker
+
+// summarize(outfile, tableHead, tickTable, movies, showings)
+// Formats and prints the tickTable as a (movies+1) x (showings+1) matrix of Movies and Showings.
+// The table is "printed" to the outfile, along with the supplied heading.
+func summarize(outfile *os.File, tableHead string, tickTable [][]int, movies int, showings int) {
+	fmt.Fprintf(outfile, "%s\n             ", tableHead) // Blanks after the NL = len("All showings ")
+	for i := 0; i < movies; i++ {
+		fmt.Fprintf(outfile, "Movie %2d  ", i) // Do NOT use a newline here!
+	}
+	fmt.Fprintln(outfile, "All movies")
+	for j := 0; j <= showings; j++ {
+		if j == showings {
+			fmt.Fprintf(outfile, "All showings ") // NO NL
+		} else {
+			fmt.Fprintf(outfile, "Showing %2d   ", j) // NO NL
+		}
+		for i := 0; i <= movies; i++ {
+			fmt.Fprintf(outfile, "%8d  ", tickTable[i][j])
+		}
+		fmt.Fprintln(outfile, "")
+	}
+} // summarize
 
 // cafeteria models the theatre's cafeteria.  It is run as a Goroutine.
 // In the initial implementation, all it does is perform exchanges of free
@@ -470,7 +490,8 @@ func cafeteria(chTracker chan interface{}, chDone chan interface{}, chCafeteria 
 //
 // chTracker
 //    The channel which the window should use to notify the tracker
-//    that an exchange has been performed.
+//    that a sale has been processed (informs of both sold tickets and
+//    unable-to-sell-because-sold-out ticket requests).
 //    Also sends msgDone on chTracker, to inform tracker that it is closing.
 // chStopWin
 //    This channel never carries any actual traffic.  Instead, it is used as a
@@ -561,7 +582,10 @@ func window(chTracker chan interface{}, chStopWin chan msgStop, chDone chan inte
 //
 // chTracker
 //    The channel which the window should use to notify the tracker
-//    that an exchange has been performed.
+//    that a sale has been performed (although it is possible that no
+//    tickets were actually sold [i.e. the notification could contain
+//    only sold-out placeholders], if all of the requested showings were
+//    sold out).
 // chCafeteria
 //    The channel which the window should use to send exchange requests
 //    to the Cafeteria.
