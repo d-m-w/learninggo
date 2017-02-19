@@ -245,7 +245,12 @@ func sellTickets(w http.ResponseWriter, rqst *http.Request) {
 	ticks, rcpt, err := tickets.Sell(window, requestData.TicketRequests, requestData.PaymentInfo, requestData.LocalTime)
 	if err != nil {
 		L.Printf("Request '%s' failed:  error from tickets.Sell:  %v\n", rqst.URL.Path, err)
-		http.Error(w, fmt.Sprintf("%v", err), http.StatusBadRequest)
+		switch err {
+		case tickets.ErrNoMoreTickets:
+			http.Error(w, fmt.Sprintf("%v", err), http.StatusTooManyRequests)
+		default:
+			http.Error(w, fmt.Sprintf("%v", err), http.StatusBadRequest)
+		}
 		return
 	}
 

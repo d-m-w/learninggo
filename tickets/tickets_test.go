@@ -75,6 +75,8 @@ func TestInitAndTicketProducer(tst *testing.T) {
 	}
 } // TestInitAndTicketProducer
 
+// This test should occur before testing selling or exchanging.
+// The  _other_  nextTicket test needs to be the last test.
 func TestNextTicket(tst *testing.T) {
 	t, err := nextTicket()
 	lastTickNum++
@@ -204,3 +206,29 @@ func TestExchange(tst *testing.T) {
 		tst.Errorf("totExchanges should not have changed when an exchange is not allowed.  Was %d, now %d.", origExchanges, totExchanges)
 	}
 } // TestExchange
+
+// This test needs to occur last, because it deliberately runs
+// the nextTicket() up to its limit.
+func TestNextTicketRunsOutOfTickets(tst *testing.T) {
+	var t Ticket  // need scope of t to be the whole function
+	var err error // can't use := in the 'for' initializer, bec. that would hide the above definition of 't'
+	prevtnum := -1
+
+	for t, err = nextTicket(); t.TicketNum < len(ticketRqstDB)-1; t, err = nextTicket() {
+		// Loop to consume all of the valid ticket numbers
+		if err != nil {
+			tst.Errorf("nextTicket() returned error %v when a valid ticket number was expected.  Last valid ticket number returned was %d", err, prevtnum)
+			break
+		}
+		prevtnum = t.TicketNum
+	}
+	// The above loop should have consumed all of the valid ticket numbers
+	if t.TicketNum != len(ticketRqstDB)-1 {
+		tst.Errorf("Last ticket number returned from consume-all-valid-ticket-numbers loop was %d, expecting %d", t.TicketNum, len(ticketRqstDB)-1)
+	}
+	L.Printf("\n\t\t\tThis nextTicket() call should exceed the limit ...")
+	t, err = nextTicket()
+	if err != ErrNoMoreTickets {
+		tst.Errorf("nextTicket() call intended to exceed ticket limit returned error %v, expecting %v (ErrNoMoreTickets)", err, ErrNoMoreTickets)
+	}
+} // TestNextTicketRunsOutOfTickets

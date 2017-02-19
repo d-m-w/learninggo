@@ -345,6 +345,10 @@ mainloop:
 				} else if strings.Contains(strings.ToLower(x.(msgDone).head.from), "window") {
 					winctr--
 					L.Printf("SHUTDOWN - tracker received msgDone from %+v, %d more ticket windows to go\n", x, winctr)
+					if winctr == 0 && shutdownTimer.Stop() {
+						L.Printf("SHUTSOWN - unsolicited window closes received from all windows (either a system error has occurred, or the theatre is out of tickets);  tracker initiating system shutdown\n")
+						close(chStopWin) // propagate shutdown to anyplace that still doesn't know about it
+					}
 				} else {
 					L.Printf("SHUTDOWN - tracker ignoring msgDone from unknown source:  %+v\n", x)
 				}
@@ -547,23 +551,34 @@ func window(chTracker chan interface{}, chStopWin chan msgStop, chDone chan inte
 			time.Sleep(time.Duration(rand.Int63n(randlimit)))
 		}
 
-		makeSale(chTracker, chCafeteria, iWindow, iMovies, iShowings, iMax) // makeSale responsible for error handling/logging
+		err := makeSale(chTracker, chCafeteria, iWindow, iMovies, iShowings, iMax) // makeSale responsible for error handling/logging
 
-		select {
-		case m, ok := <-chStopWin:
-			if !ok {
-				L.Printf("SHUTDOWN - chStopWin has been closed and drained.  Shutting down window %d.\n", iWindow)
-				chTracker <- msgDone{head: msgHeader{at: time.Now(), from: "window"}} // tell tracker()
-				chDone <- msgDone{head: msgHeader{at: time.Now(), from: "window"}}    // tell main()
-				if iWindow == 1 {
-					close(chCafeteria)
-					L.Printf("SHUTDOWN - window %d closed chCafeteria.  The Cafeteria should beging shutting down now.", iWindow)
-				}
-				runtime.Goexit()
+		if err == tickets.ErrNoMoreTickets {
+			L.Printf("SHUTDOWN - sales attempt received ErrNoMoreTickets.  Closing window %d.\n", iWindow)
+			chTracker <- msgDone{head: msgHeader{at: time.Now(), from: "window"}} // tell tracker()
+			chDone <- msgDone{head: msgHeader{at: time.Now(), from: "window"}}    // tell main()
+			if iWindow == 1 {
+				close(chCafeteria)
+				L.Printf("SHUTDOWN - window %d closed chCafeteria.  The Cafeteria should beging shutting down now.", iWindow)
 			}
-			L.Printf("SHUTDOWN - Unexpected message type %T ignored by window %d on chStopWin:  %+v\n", m, iWindow, m)
-		default:
-		} // select per input event
+			runtime.Goexit()
+		} else {
+			select {
+			case m, ok := <-chStopWin:
+				if !ok {
+					L.Printf("SHUTDOWN - chStopWin has been closed and drained.  Shutting down window %d.\n", iWindow)
+					chTracker <- msgDone{head: msgHeader{at: time.Now(), from: "window"}} // tell tracker()
+					chDone <- msgDone{head: msgHeader{at: time.Now(), from: "window"}}    // tell main()
+					if iWindow == 1 {
+						close(chCafeteria)
+						L.Printf("SHUTDOWN - window %d closed chCafeteria.  The Cafeteria should beging shutting down now.", iWindow)
+					}
+					runtime.Goexit()
+				}
+				L.Printf("SHUTDOWN - Unexpected message type %T ignored by window %d on chStopWin:  %+v\n", m, iWindow, m)
+			default:
+			} // select per input event
+		} // else err isn't tickets.ErrNoMoreTickets
 	} // main loop
 
 	// Should not be able to get here.
@@ -603,7 +618,9 @@ func window(chTracker chan interface{}, chStopWin chan msgStop, chDone chan inte
 // iMax
 //    The maximum number of tickets the customer is allowed to buy.
 //    Assumed to be at least 1.
-func makeSale(chTracker chan interface{}, chCafeteria chan xchData, iWindow int, iMovies int, iShowings int, iMax int) {
+//
+// Returns any error that causes it to give up.
+func makeSale(chTracker chan interface{}, chCafeteria chan xchData, iWindow int, iMovies int, iShowings int, iMax int) error {
 	L.Printf("makeSale(chTracker,chCafeteria,iWindow=%d,iMovies=%d,iShowings=%d,iMax=%d) called.\n",
 		iWindow, iMovies, iShowings, iMax)
 	url := fmt.Sprintf("%s/sell/%d/", ticketServer, iWindow)
@@ -629,58 +646,65 @@ func makeSale(chTracker chan interface{}, chCafeteria chan xchData, iWindow int,
 	rqstJSON, err := json.Marshal(rqst)
 	if err != nil {
 		L.Printf("makeSale for window %d failed:  unable to convert rqst to JSON format:  %v\n", iWindow, err)
-		return
+		return err
 	}
 	L.Printf("makeSale for window %d POSTing ticket requests to %s\n", iWindow, url)
 	response, err := http.Post(url, "application/json", bytes.NewReader(rqstJSON))
 	L.Printf("makeSale for window %d received response:\n%+v\n\n%#v\n", iWindow, response, response)
-	if err != nil {
+	L.Printf("makeSale for window %d \tDEBUG\t response.StatusCode=%d,http.StatusTooManyRequests=%d", iWindow, response.StatusCode, http.StatusTooManyRequests)
+	switch {
+	case err != nil:
 		L.Printf("makeSale for window %d failed:  sell service failed:  \n\turl=%s\nerr=%v\n", iWindow, url, err)
-		return
-	} else if response.StatusCode == http.StatusOK {
-		var responseData struct {
-			// All fields must be exported (capitalized), to be visible to json.
-			Ticks []tickets.Ticket
-			Rcpt  tickets.Receipt
-		}
-		jbytes, err := ioutil.ReadAll(response.Body)
-		if err != nil {
-			L.Printf("makeSale for window %d failed:  cannot read sell service call's response.Body:  %v\n", iWindow, err)
-			return
-		}
-
-		jbuffer := bytes.NewBuffer(jbytes)
-		L.Printf("makeSale for window %d received %d bytes of raw response.Body:\n%s\n", iWindow, len(jbytes), jbuffer.String())
-		jparser := json.NewDecoder(jbuffer)
-		//jparser := json.NewDecoder(response.Body)
-		defer response.Body.Close()
-		if err := jparser.Decode(&responseData); err != nil {
-			L.Printf("makeSale for window %d failed:  sell service call reported status OK but response data not in JSON format:  %v\n", iWindow, url, err)
-			return
-		}
-		L.Printf("makeSale for window %d sell service call succeeded.  Notifying tracker ...\n", iWindow)
-		chTracker <- msgTicketSale{head: msgHeader{at: time.Now(), from: "window"}, window: iWindow, ticks: responseData.Ticks}
-		L.Printf("makeSale for window %d tracker notification sent.\n", iWindow)
-		L.Printf("makeSale for window %d sell service call succeeded.  Receipt:\n%+v\nTickets:\n", iWindow, responseData.Rcpt)
-		for _, t := range responseData.Ticks {
-			L.Printf("\tticket:  %+v\n", t)
-			if t.Goodies {
-				exchangeIt := rand.Intn(10)%2 == 0 // even -> true = try to exchange the water, odd -> false = keep it
-				if exchangeIt {
-					x := xchData{head: msgHeader{at: time.Now(), from: "window " + strconv.Itoa(iWindow)}, tickNum: t.TicketNum}
-					chCafeteria <- x
-					L.Printf("\t\t(exchange sent:  %+v)\n", x)
-				} else {
-					L.Printf("\t\t(not exchanged)\n")
-				}
-			} else {
-				L.Printf("\t\t(no goodies to consider exchanging)\n")
-			}
-		}
-	} else {
+		return err
+	case response.StatusCode == http.StatusOK:
+		// Desired state - nothing to do inside switch
+	case response.StatusCode == http.StatusTooManyRequests:
+		L.Printf("makeSale for window %d sell service call failed with status %s.\n\t\t\t  Sale abandoned.  Returning ErrNoMoreTickets.\n\t\t\t  This ticket window should be closed.\n", iWindow, response.Status)
+		return tickets.ErrNoMoreTickets
+	default:
 		L.Printf("makeSale for window %d sell service call failed with status %s.  Sale abandoned.\n", iWindow, response.Status)
-		return
+		return fmt.Errorf("Unexpected status %s from POSTing ticket requests", response.Status)
 	}
 
-	return
+	var responseData struct {
+		// All fields must be exported (capitalized), to be visible to json.
+		Ticks []tickets.Ticket
+		Rcpt  tickets.Receipt
+	}
+	jbytes, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		L.Printf("makeSale for window %d failed:  cannot read sell service call's response.Body:  %v\n", iWindow, err)
+		return err
+	}
+
+	jbuffer := bytes.NewBuffer(jbytes)
+	L.Printf("makeSale for window %d received %d bytes of raw response.Body:\n%s\n", iWindow, len(jbytes), jbuffer.String())
+	jparser := json.NewDecoder(jbuffer)
+	//jparser := json.NewDecoder(response.Body)
+	defer response.Body.Close()
+	if err := jparser.Decode(&responseData); err != nil {
+		L.Printf("makeSale for window %d failed:  sell service call reported status OK but response data not in JSON format:  %v\n", iWindow, url, err)
+		return err
+	}
+	L.Printf("makeSale for window %d sell service call succeeded.  Notifying tracker ...\n", iWindow)
+	chTracker <- msgTicketSale{head: msgHeader{at: time.Now(), from: "window"}, window: iWindow, ticks: responseData.Ticks}
+	L.Printf("makeSale for window %d tracker notification sent.\n", iWindow)
+	L.Printf("makeSale for window %d sell service call succeeded.  Receipt:\n%+v\nTickets:\n", iWindow, responseData.Rcpt)
+	for _, t := range responseData.Ticks {
+		L.Printf("\tticket:  %+v\n", t)
+		if t.Goodies {
+			exchangeIt := rand.Intn(10)%2 == 0 // even -> true = try to exchange the water, odd -> false = keep it
+			if exchangeIt {
+				x := xchData{head: msgHeader{at: time.Now(), from: "window " + strconv.Itoa(iWindow)}, tickNum: t.TicketNum}
+				chCafeteria <- x
+				L.Printf("\t\t(exchange sent:  %+v)\n", x)
+			} else {
+				L.Printf("\t\t(not exchanged)\n")
+			}
+		} else {
+			L.Printf("\t\t(no goodies to consider exchanging)\n")
+		}
+	}
+
+	return nil
 } // makeSale

@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"runtime"
 	"strconv"
 	"sync"
@@ -119,6 +118,11 @@ var salesOpen bool // WARNING!  This MAY be exposed to visibility problems
 var initGate sync.Once
 
 /*  Public error constants  */
+
+// ErrNoMoreTickets  is returned when all possible tickets have already been
+// produced, and nextTicket() is called again.
+// By implication, this means the ticketRqstDB is also full.
+var ErrNoMoreTickets = errors.New("Ticket Sales terminated:  no more tickets exist.")
 
 // ErrXchNotEntitled  is returned when a goodie exchange is denied because the
 // ticket does not entitle the customer to any goodies, either because the movie
@@ -256,12 +260,12 @@ func ticketProducer(tRoll chan<- int) {
 } //ticketProducer
 
 // nextTicket pulls the next available ticket number off the ticketRoll.  If
-// the ticket number is beyond the end of ticketRqstDB, then it logs a fatal
-// error and terminates the program.  Otherwise, it marks that Ticket allocated
-// in the ticketRqstDB (by setting the TicketNum field in the Ticket), and
-// returns the Ticket to the caller.  If no ticket number is available, then it
-// waits for one.  If an error occurs on the ticketRoll, it panics, because
-// ticket number acquisition is a critical step for all ticket sales.
+// the ticket number is beyond the end of ticketRqstDB, then it logs the error
+// and returns a Ticket with TicketNum = -1 and ErrNoMoreTickets.  Otherwise,
+// it marks that Ticket allocated in the ticketRqstDB (by setting the
+// field in the Ticket), and returns the Ticket to the caller.  If no ticket
+// number is available, then it waits for one.  If the ticketRoll is not open,
+// then it returns an error indicating that.
 //
 // Because the ticketRoll access is threadsafe, and the ticket number pulled
 // off of it is guaranteed unique, it is not necessary to lock the ticketRqstDB
@@ -281,11 +285,11 @@ func nextTicket() (Ticket, error) {
 	}
 
 	if t >= len(ticketRqstDB) {
-		L.Printf("nextTicket cannot continue:  new number %d exceeds capacity of ticketRqstDB (last element is [%d]).  Aborting ...", t, (len(ticketRqstDB) - 1))
+		L.Printf("nextTicket cannot continue:  new number %d exceeds capacity of ticketRqstDB (last element is [%d]).", t, (len(ticketRqstDB) - 1))
 		b := make([]byte, 16*1024)
 		u := runtime.Stack(b, true)
 		L.Printf("\n%s\n", bytes.NewBuffer(b[:u]).String())
-		os.Exit(1) // panic doesn't work in a web server - it just kills the current transaction
+		return Ticket{TicketNum: -1}, ErrNoMoreTickets
 	}
 
 	// Mark the Ticket as in-use, in case of restart/recovery (not implemented in the initial release).
@@ -564,7 +568,12 @@ func Sell(window int, ticketRequests [][2]int, paymentInfo map[string]interface{
 
 	for i, trqst := range ticketRequests {
 		t, err := nextTicket()
-		if err != nil {
+		switch {
+		case err == nil:
+			// Desired state - do nothing - fall out of switch
+		case err == ErrNoMoreTickets:
+			return tickets, receipt, err
+		default:
 			return tickets, receipt, fmt.Errorf("Sell failed:  ticket request %d:  %v", (i + 1), err)
 		}
 		t.Movie = trqst[TRMovie]
