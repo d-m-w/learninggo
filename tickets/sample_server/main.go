@@ -244,14 +244,17 @@ func sellTickets(w http.ResponseWriter, rqst *http.Request) {
 
 	ticks, rcpt, err := tickets.Sell(window, requestData.TicketRequests, requestData.PaymentInfo, requestData.LocalTime)
 	if err != nil {
-		L.Printf("Request '%s' failed:  error from tickets.Sell:  %v\n", rqst.URL.Path, err)
+		L.Printf("Request '%s':  error from tickets.Sell after processing %d ticket requests:  %v\n", rqst.URL.Path, len(ticks), err)
+		// Use zero-length string for body argument, so that we can
+		// still write JSON data to the body, if there is any.  If
+		// we wrote a non-empty string here, then the caller would
+		// get a JSON unmarshalling error.
 		switch err {
 		case tickets.ErrNoMoreTickets:
-			http.Error(w, fmt.Sprintf("%v", err), http.StatusTooManyRequests)
+			http.Error(w, "", http.StatusTooManyRequests)
 		default:
-			http.Error(w, fmt.Sprintf("%v", err), http.StatusBadRequest)
+			http.Error(w, "", http.StatusBadRequest)
 		}
-		return
 	}
 
 	var responseData struct {

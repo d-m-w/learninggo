@@ -623,6 +623,7 @@ func window(chTracker chan interface{}, chStopWin chan msgStop, chDone chan inte
 func makeSale(chTracker chan interface{}, chCafeteria chan xchData, iWindow int, iMovies int, iShowings int, iMax int) error {
 	L.Printf("makeSale(chTracker,chCafeteria,iWindow=%d,iMovies=%d,iShowings=%d,iMax=%d) called.\n",
 		iWindow, iMovies, iShowings, iMax)
+	var reterr error = nil
 	url := fmt.Sprintf("%s/sell/%d/", ticketServer, iWindow)
 	items := 1 + rand.Intn(iMax) // number of items which will be purchased, if they're not sold out already
 	rqst := make(map[string]interface{})
@@ -651,7 +652,6 @@ func makeSale(chTracker chan interface{}, chCafeteria chan xchData, iWindow int,
 	L.Printf("makeSale for window %d POSTing ticket requests to %s\n", iWindow, url)
 	response, err := http.Post(url, "application/json", bytes.NewReader(rqstJSON))
 	L.Printf("makeSale for window %d received response:\n%+v\n\n%#v\n", iWindow, response, response)
-	L.Printf("makeSale for window %d \tDEBUG\t response.StatusCode=%d,http.StatusTooManyRequests=%d", iWindow, response.StatusCode, http.StatusTooManyRequests)
 	switch {
 	case err != nil:
 		L.Printf("makeSale for window %d failed:  sell service failed:  \n\turl=%s\nerr=%v\n", iWindow, url, err)
@@ -659,18 +659,24 @@ func makeSale(chTracker chan interface{}, chCafeteria chan xchData, iWindow int,
 	case response.StatusCode == http.StatusOK:
 		// Desired state - nothing to do inside switch
 	case response.StatusCode == http.StatusTooManyRequests:
-		L.Printf("makeSale for window %d sell service call failed with status %s.\n\t\t\t  Sale abandoned.  Returning ErrNoMoreTickets.\n\t\t\t  This ticket window should be closed.\n", iWindow, response.Status)
-		return tickets.ErrNoMoreTickets
+		L.Printf("makeSale for window %d sell service call returned status %s.\n", iWindow, response.Status)
+		reterr = tickets.ErrNoMoreTickets
 	default:
-		L.Printf("makeSale for window %d sell service call failed with status %s.  Sale abandoned.\n", iWindow, response.Status)
-		return fmt.Errorf("Unexpected status %s from POSTing ticket requests", response.Status)
+		L.Printf("makeSale for window %d sell service call returned status %s.\n", iWindow, response.Status)
+		reterr = fmt.Errorf("Unexpected status %s from POSTing ticket requests", response.Status)
 	}
+
+	defer response.Body.Close()
 
 	var responseData struct {
 		// All fields must be exported (capitalized), to be visible to json.
 		Ticks []tickets.Ticket
 		Rcpt  tickets.Receipt
 	}
+
+	// Read the response.Body into a byte buffer and separately decode it,
+	// instead of directly decoding the response.Body, so that we can dump
+	// the response.Body before decoding it, for debugging purposes.
 	jbytes, err := ioutil.ReadAll(response.Body)
 	if err != nil {
 		L.Printf("makeSale for window %d failed:  cannot read sell service call's response.Body:  %v\n", iWindow, err)
@@ -681,15 +687,14 @@ func makeSale(chTracker chan interface{}, chCafeteria chan xchData, iWindow int,
 	L.Printf("makeSale for window %d received %d bytes of raw response.Body:\n%s\n", iWindow, len(jbytes), jbuffer.String())
 	jparser := json.NewDecoder(jbuffer)
 	//jparser := json.NewDecoder(response.Body)
-	defer response.Body.Close()
 	if err := jparser.Decode(&responseData); err != nil {
 		L.Printf("makeSale for window %d failed:  sell service call reported status OK but response data not in JSON format:  %v\n", iWindow, url, err)
 		return err
 	}
-	L.Printf("makeSale for window %d sell service call succeeded.  Notifying tracker ...\n", iWindow)
+	L.Printf("makeSale for window %d sell service response decoded.  Notifying tracker ...\n", iWindow)
 	chTracker <- msgTicketSale{head: msgHeader{at: time.Now(), from: "window"}, window: iWindow, ticks: responseData.Ticks}
 	L.Printf("makeSale for window %d tracker notification sent.\n", iWindow)
-	L.Printf("makeSale for window %d sell service call succeeded.  Receipt:\n%+v\nTickets:\n", iWindow, responseData.Rcpt)
+	L.Printf("makeSale for window %d receipt:\n%+v\nTickets:\n", iWindow, responseData.Rcpt)
 	for _, t := range responseData.Ticks {
 		L.Printf("\tticket:  %+v\n", t)
 		if t.Goodies {
@@ -706,5 +711,13 @@ func makeSale(chTracker chan interface{}, chCafeteria chan xchData, iWindow int,
 		}
 	}
 
-	return nil
+	switch reterr {
+	case nil:
+		L.Printf("makeSale for window %d returning success.\n", iWindow)
+	case tickets.ErrNoMoreTickets:
+		L.Printf("makeSale for window %d returning ErrNoMoreTickets.\n\t\t\t  This ticket window should be closed.\n", iWindow)
+	default:
+		L.Printf("makeSale for window %d returning partial failure.\n", iWindow)
+	}
+	return reterr
 } // makeSale

@@ -530,6 +530,9 @@ func Exchange(tickNum int, oldGoodie string, newGoodie string) error {
 // tickets
 //    An array of Tickets, which can be a mix of valid tickets and sold-out
 //    placeholders.  This is in the same order as the incoming ticketRequests.
+//    If an error occurs, this list may be short.
+//    The receipt is guaranteed to match the possibly-short list of tickets
+//    actually returned.
 // receipt
 //    A receipt for whatever tickets were actually sold, if any.
 // err
@@ -538,15 +541,17 @@ func Exchange(tickNum int, oldGoodie string, newGoodie string) error {
 //        mentation ignores the paymentInfo and localTime fields.
 //      * Any internal error which occurs is passed through.
 //      * An error is returned if the salesOpen (system up) flag is not set.
+//      * If any tickets were fully processed before the error was detected,
+//        then those tickets, and a corresponding receipt, are passed back.
 func Sell(window int, ticketRequests [][2]int, paymentInfo map[string]interface{}, localTime interface{}) (tickets []Ticket, receipt Receipt, err error) {
 
 	if !salesOpen {
 		return tickets, receipt, errors.New("Sell failed:  ticketing system is down.")
 	}
 
-	var totalprice = 0 // in pennies
-	tickets = make([]Ticket, len(ticketRequests), len(ticketRequests))
-	receipt = Receipt{Time: localTime, Window: window}
+	// empty slices w/ correct capacity = no reallocations
+	tickets = make([]Ticket, 0, len(ticketRequests))
+	receipt = Receipt{Time: localTime, Window: window, ItemsSold: make([]RItem, 0, len(ticketRequests)), Total: 0}
 
 	if window < 1 || window > maxWindows {
 		return tickets, receipt, fmt.Errorf("Sell failed:  window %d out of range.  Must be between 1 and %d, inclusive.", window, maxWindows)
@@ -580,23 +585,22 @@ func Sell(window int, ticketRequests [][2]int, paymentInfo map[string]interface{
 		t.Showing = trqst[TRShowing]
 		t.Window = window
 		t.Price, t.SoldOut = checkAvailabilityAndPrice(t.Movie, t.Showing)
-		if !t.SoldOut {
-			totalprice += t.Price
-			if window == 1 {
-				t.Goodies = true
-			}
-			item := RItem{Desc: fmt.Sprintf("Movie %d, Showing %d", t.Movie, t.Showing), Pennies: t.Price}
-			receipt.ItemsSold = append(receipt.ItemsSold, item)
+		if !t.SoldOut && window == 1 {
+			t.Goodies = true
 		}
-		tickets[i] = t
 		err = updateTicketSale(t)
 		if err != nil {
 			return tickets, receipt, fmt.Errorf("Sell failed:  ticket request %d:  %v", (i + 1), err)
 		}
+		// Now that we know the ticket is fully processed in the DB, accumulate the results.
+		if !t.SoldOut {
+			receipt.Total += t.Price
+			item := RItem{Desc: fmt.Sprintf("Movie %d, Showing %d", t.Movie, t.Showing), Pennies: t.Price}
+			receipt.ItemsSold = append(receipt.ItemsSold, item)
+		}
+		tickets = append(tickets, t)
 
-	}
-
-	receipt.Total = totalprice
+	} // for range ticketRequests
 
 	L.Printf("Sell for window %d returning:\n\ttickets:\n%+v\n\treceipt:\n%+v\n", window, tickets, receipt)
 
