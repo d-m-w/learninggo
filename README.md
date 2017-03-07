@@ -21,3 +21,5 @@ CAUTION!  As of 01FEB2017, the exchanges, movies, showings, seats, and windows
           A uniform startup, inherited startup, or config query would be nice
           to have to remedy this situation.
 
+          This issue is fixed by Issue nbr 4 in the 'advancing' branch.
+          As of 07MAR2017, the 'advancing' branch has NOT been merged back to master.
