@@ -157,7 +157,7 @@ func initTicketService(w http.ResponseWriter, rqst *http.Request) {
 // exchange, then the specified item is reported as exchanged for the specified
 // replacement, in the ticketing system.
 //
-// Returns HTTP 400 on errors and HTTP 204 on success.
+// Returns HTTP 400 on errors, HTTP 429 when out of exchange goods, and HTTP 204 on success.
 // No payload is ever sent back.
 func handleExchange(w http.ResponseWriter, rqst *http.Request) {
 	const (
@@ -177,15 +177,19 @@ func handleExchange(w http.ResponseWriter, rqst *http.Request) {
 	}
 
 	err = tickets.Exchange(tickNum, pathParts[PPOldGoodie], pathParts[PPNewGoodie])
-	if err != nil {
+	switch err {
+	case nil:
+		// I don't think calling "Error" is really the right way to report success,
+		// but I can't find any other way to send back a 204 ...
+		http.Error(w, "exchanged", http.StatusNoContent)
+	case tickets.ErrXchOutOfGoods:
+		L.Printf("Unable to perform request '%s':  %v\n", rqst.URL.Path, err)
+		http.Error(w, fmt.Sprintf("%v", err), http.StatusTooManyRequests)
+	default:
 		L.Printf("Request '%s' failed:  error from tickets.Exchange:  %v\n", rqst.URL.Path, err)
 		http.Error(w, fmt.Sprintf("%v", err), http.StatusBadRequest)
-		return
 	}
 
-	// I don't think calling "Error" is really the right way to report success,
-	// but I can't find any other way to send back a 204 ...
-	http.Error(w, "exchanged", http.StatusNoContent)
 	return
 } // handleExchange
 
@@ -213,7 +217,7 @@ func handleExchange(w http.ResponseWriter, rqst *http.Request) {
 // If there are no errors, then the Sell function's response converted to JSON
 // format and returned, with an HTTP 200 status code.
 //
-// If an error occurs, then HTTP 400 or 500 is returned.
+// If an error occurs, then HTTP 400, 429, or 500 is returned.
 func sellTickets(w http.ResponseWriter, rqst *http.Request) {
 	const (
 		PPWindow = 3 // where's the Window# in the URL.Path?

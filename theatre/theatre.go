@@ -40,9 +40,10 @@ type msgStop struct {
 }
 
 type msgExchange struct {
-	head           msgHeader
-	tickNum        int
-	xchOld, xchNew string
+	head                     msgHeader
+	tickNum                  int
+	xchOld, xchNew           string
+	success, ranout, failure int
 }
 
 type msgTicketSale struct {
@@ -147,8 +148,8 @@ func main() {
 	// initBackend succeeds or dies, no need to return error
 	initBackend(*ipExchanges, *ipMovies, *ipShowings, *ipSeats, *ipWindows)
 
-	retCd := 0                                                                                                  // Now that the server is started, need a default return code for stopping it.
-	eojMsg := "theatre started the server and is continuing to initialie.\nShutdown not expected at this time." // ... and a default shutdown message.
+	retCd := 0                                                                                                   // Now that the server is started, need a default return code for stopping it.
+	eojMsg := "theatre started the server and is continuing to initialize.\nShutdown not expected at this time." // ... and a default shutdown message.
 
 	chTracker := make(chan interface{}, 5) // All message TO tracker go over this channel (msgTicketSale, msgExchange, and some msgDone)
 	chStopWin := make(chan msgStop)        // Used to broadcast shutdown order to ticket windows, by closing the channel, as advised by Donovan & Kernighan, pg 251
@@ -173,7 +174,7 @@ func main() {
 	//      They send msgDone on chTracker to notify tracker, and
 	//      on chDone to notify main().
 	//   *  While shutting down, window 1 closes chCafeteria
-	//   *  When the Cafeteria notices chCafeteria is closed, then in
+	//   *  When the Cafeteria notices chCafeteria is closed, then
 	//      it closes, and sends msgDone on chTracker and chDone.
 	//   *  When tracker has msgDone from the Cafeteria and all ticket
 	//      windows, then tracker prints the summary report, sends
@@ -269,7 +270,7 @@ func initBackend(mExch, mMov, mShow, mSeats, mWins int) {
 //    notifications from the cafeteria and ticket windows.
 // chStopWin
 //    This channel never carries any actual traffic.  Instead, it is used as a
-//    broadcast one-shot (by closing it), to sidgnal ticket windows to close.
+//    broadcast one-shot (by closing it), to signal ticket windows to close.
 // chDone
 //    The common channel which all goroutines use to communicate run status.
 // runningtime
@@ -292,7 +293,9 @@ func tracker(chTracker chan interface{}, chStopWin chan msgStop, chDone chan int
 	shutdownTimer := time.NewTimer(runningtime)
 	var chTrackerOpen = true
 	var cafeteriaClosed = false
-	var exchangeCtr = 0
+	var xchSuccessCtr = 0
+	var xchRanoutCtr = 0
+	var xchFailureCtr = 0
 
 	// In each of these tables, the last position in each row and column
 	// will be used for totals for each showing and movie, and a grand total
@@ -322,7 +325,9 @@ mainloop:
 			switch x.(type) {
 			case msgExchange:
 				L.Printf("Processing Exchange notification:  %+v\n", x)
-				exchangeCtr++
+				xchSuccessCtr += x.(msgExchange).success
+				xchRanoutCtr += x.(msgExchange).ranout
+				xchFailureCtr += x.(msgExchange).failure
 			case msgTicketSale:
 				L.Printf("Processing ticket sales notification:  %+v\n", x)
 				for _, t := range x.(msgTicketSale).ticks {
@@ -382,7 +387,9 @@ mainloop:
 
 	fmt.Fprintf(summaryReport, `Ticket and Exchange Report                             %s
 
-%d Exchanges performed`, summaryReportHead, exchangeCtr)
+%3d Exchanges performed`, summaryReportHead, xchSuccessCtr)
+	fmt.Fprintf(summaryReport, "\n%3d Exchanges which couldn't be performed due to lack of exchange goods", xchRanoutCtr)
+	fmt.Fprintf(summaryReport, "\n%3d Exchanges which failed for other reasons\n", xchFailureCtr)
 	summarize(summaryReport, "\nTicket Sales per Movie and Showing", ticketsSold, movies, showings)
 	summarize(summaryReport, "\n\nMissed Sales Due to Sellouts per Movie and Showing", soldOuts, movies, showings)
 
@@ -415,8 +422,8 @@ func summarize(outfile *os.File, tableHead string, tickTable [][]int, movies int
 
 // cafeteria models the theatre's cafeteria.  It is run as a Goroutine.
 // In the initial implementation, all it does is perform exchanges of free
-// water for soda, using the tickets system, and notify the tracker when
-// it has performed such an exchange.
+// water for soda, using the tickets system, and notify the tracker of the
+// results of such an exchange request.
 //
 // It responds to a msgStop with what="cafeteria" on the chDone channel by
 // shutting down.
@@ -425,7 +432,7 @@ func summarize(outfile *os.File, tableHead string, tickTable [][]int, movies int
 //
 // chTracker
 //    The channel which the Cafeteria should use to notify the tracker
-//    that an exchange has been performed.
+//    that an exchange has been performed or attempted.
 //    Also sends msgDone on chTracker, to inform tracker that it is closing.
 // chDone
 //    Sends msgDone on chDone to inform main() that it is closing down.
@@ -434,7 +441,7 @@ func summarize(outfile *os.File, tableHead string, tickTable [][]int, movies int
 //    being sent over by the ticket window(s).  The cafeteria does not need
 //    to know the window rules, because the tickets engine will determine
 //    whether the request is valid or not.
-//    When this channel is closed by a ticket window, it inidates that the
+//    When this channel is closed by a ticket window, it indicates that the
 //    Cafeteria should close down.
 //
 // Returns nothing
@@ -458,21 +465,38 @@ func cafeteria(chTracker chan interface{}, chDone chan interface{}, chCafeteria 
 			}
 			L.Printf("Cafeteria received exchange request:  %+v\n", x)
 			// make HTTP request to tickets/exchange/<tickNum>/water/soda
-			// if successful (HTTP 204), send a msgExchange to tracker
-			// if unsuccessful, log it and continue
+			// log results and send a msgExchange to tracker reporting them:
+			//  - successful       (HTTP 204)
+			//  - ran out of goods (HTTP 429)
+			//  - failure          (other)
 			url := fmt.Sprintf("%s/exchange/%d/%s/%s/", ticketServer, x.tickNum, exchangeold, exchangenew)
 			L.Printf("cafeteria GETing exchange from %s\n", url)
 			response, err := http.Get(url)
+			m := msgExchange{head: msgHeader{at: time.Now(), from: "cafeteria"}, tickNum: x.tickNum, xchOld: exchangeold, xchNew: exchangenew}
+			mtxt := "status unknown - internal logic error in theatre.go"
 			if err != nil {
-				L.Printf("Cafeteria exchange failed:\n\turl=%s\nerr=%v\n", url, err)
-			} else if response.StatusCode == http.StatusNoContent {
-				L.Printf("Cafeteria exchange succeeded.  Notifying tracker ...\n")
-				chTracker <- msgExchange{head: msgHeader{at: time.Now(), from: "cafeteria"}, tickNum: x.tickNum, xchOld: exchangeold, xchNew: exchangenew}
-				L.Printf("Cafeteria exchange notification sent.\n")
+				mtxt = fmt.Sprintf("failed:\n\turl=%s\n\terr=%v\n\t", x.tickNum, url, err)
+				m.failure++
 			} else {
-				L.Printf("Cafeteria exchange denied by tickets server with status %s\n", response.Status)
+				switch response.StatusCode {
+				case http.StatusNoContent:
+					mtxt = "succeeded"
+					m.success++
+				case http.StatusTooManyRequests:
+					// Note:  NOT caching the
+					// StatusTooManyRequests, because we don't
+					// know if there might be a resupply of
+					// exchange goods later in the day.
+					mtxt = "not possible - no more exchange goods"
+					m.ranout++
+				default:
+					mtxt = fmt.Sprintf("denied by tickets server with status %s", response.Status)
+					m.failure++
+				}
 			}
-		} // select per input event
+			chTracker <- m
+			L.Printf("Cafeteria exchange for ticket %d %s - notification sent.\n", x.tickNum, mtxt)
+		} // select per input event, block until one occurs
 	} // main event/wait loop
 
 	// Should not be able to get here.
@@ -559,7 +583,7 @@ func window(chTracker chan interface{}, chStopWin chan msgStop, chDone chan inte
 			chDone <- msgDone{head: msgHeader{at: time.Now(), from: "window"}}    // tell main()
 			if iWindow == 1 {
 				close(chCafeteria)
-				L.Printf("SHUTDOWN - window %d closed chCafeteria.  The Cafeteria should beging shutting down now.", iWindow)
+				L.Printf("SHUTDOWN - window %d closed chCafeteria.  The Cafeteria should begin shutting down now.", iWindow)
 			}
 			runtime.Goexit()
 		} else {
@@ -571,7 +595,7 @@ func window(chTracker chan interface{}, chStopWin chan msgStop, chDone chan inte
 					chDone <- msgDone{head: msgHeader{at: time.Now(), from: "window"}}    // tell main()
 					if iWindow == 1 {
 						close(chCafeteria)
-						L.Printf("SHUTDOWN - window %d closed chCafeteria.  The Cafeteria should beging shutting down now.", iWindow)
+						L.Printf("SHUTDOWN - window %d closed chCafeteria.  The Cafeteria should begin shutting down now.", iWindow)
 					}
 					runtime.Goexit()
 				}
