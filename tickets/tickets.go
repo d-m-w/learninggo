@@ -16,6 +16,7 @@ import (
 	"log"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,9 +32,26 @@ type Receipt struct {
 
 // One line of the ItemsSold slice in a Receipt
 type RItem struct {
-	Desc    string
-	Pennies int // amount, in pennies
+	TicketNum int
+	Desc      string
+	Pennies   int // amount, in pennies
 } // RItem
+
+func (r *Receipt) String() string {
+	buf := new(bytes.Buffer)
+	buf.WriteString(fmt.Sprintf(
+		"\n\n\tReceipt for ticket sales at %v,\n\t printed at %v\n"+
+			"\t\t%d ticket(s) sold from window %d\n\t",
+		r.Time, time.Now().Format(time.RFC1123), len(r.ItemsSold), r.Window))
+	var totPennies int
+	for _, ritem := range r.ItemsSold {
+		buf.WriteString(fmt.Sprintf("%4d | %30s | $%5d.%02d\n\t", ritem.TicketNum, ritem.Desc, ritem.Pennies/100, ritem.Pennies%100))
+		totPennies += ritem.Pennies
+	}
+	buf.WriteString(strings.Repeat(" -", (4+3+30+4+8)/2)) // draw dashed line at current location
+	buf.WriteString(fmt.Sprintf("\n\t     | %30s | $%5d.%02d\n\n", "          Total", totPennies/100, totPennies%100))
+	return buf.String()
+} // Receipt.String
 
 // A ticket record.
 type Ticket struct {
@@ -48,6 +66,45 @@ type Ticket struct {
 	XchNew    string
 	Window    int
 } // Ticket
+
+func (t *Ticket) String() string {
+	var tiw int = 41                               // ticket interior width, in characters
+	topBot := "+" + strings.Repeat("-", tiw) + "+" // 1+41+1 of them
+	sout10 := "          "
+	if t.SoldOut {
+		sout10 = "(sold out)"
+	}
+	gold19 := "                   "
+	if t.Goodies {
+		gold19 = "Free goodies issued"
+	}
+	exch09 := "Not exchd"
+	if t.Exchanged {
+		exch09 = "Exchanged"
+	}
+	return fmt.Sprintf("\t%s\n"+
+		"\t| Ticket%9d for movie%3d showing%3d |\n"+
+		"\t| $%5d.%02d %10s                    |\n"+
+		"\t| Window%3d * %19s         |\n"+
+		"\t| %9s %13s %13s   |\n"+ // 13
+		"\t%s\n",
+		topBot,
+		t.TicketNum, t.Movie, t.Showing,
+		t.Price/100, t.Price%100, sout10,
+		t.Window, gold19,
+		exch09, t.XchOld, t.XchNew,
+		topBot)
+} // Ticket.String
+
+// Can't create a method for unnamed type  []Ticket,
+// so have to make this one a plain function:
+func PrintTickets(ts []Ticket) string {
+	ss := make([]string, 0, len(ts))
+	for _, t := range ts {
+		ss = append(ss, t.String())
+	}
+	return strings.Join(ss, "\n")
+} // PrintTickets
 
 const (
 	TRMovie   = 0 // where's the Movie# in a ticket request tuple?
@@ -595,14 +652,14 @@ func Sell(window int, ticketRequests [][2]int, paymentInfo map[string]interface{
 		// Now that we know the ticket is fully processed in the DB, accumulate the results.
 		if !t.SoldOut {
 			receipt.Total += t.Price
-			item := RItem{Desc: fmt.Sprintf("Movie %d, Showing %d", t.Movie, t.Showing), Pennies: t.Price}
+			item := RItem{TicketNum: t.TicketNum, Desc: fmt.Sprintf("Movie %d, Showing %d", t.Movie, t.Showing), Pennies: t.Price}
 			receipt.ItemsSold = append(receipt.ItemsSold, item)
 		}
 		tickets = append(tickets, t)
 
 	} // for range ticketRequests
 
-	L.Printf("Sell for window %d returning:\n\ttickets:\n%+v\n\treceipt:\n%+v\n", window, tickets, receipt)
+	L.Printf("Sell for window %d returning:\n\ttickets:\n%s\n\treceipt:\n%s\n", window, PrintTickets(tickets), receipt.String())
 
 	return tickets, receipt, nil
 

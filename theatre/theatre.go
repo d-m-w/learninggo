@@ -351,7 +351,7 @@ mainloop:
 					winctr--
 					L.Printf("SHUTDOWN - tracker received msgDone from %+v, %d more ticket windows to go\n", x, winctr)
 					if winctr == 0 && shutdownTimer.Stop() {
-						L.Printf("SHUTSOWN - unsolicited window closes received from all windows (either a system error has occurred, or the theatre is out of tickets);  tracker initiating system shutdown\n")
+						L.Printf("SHUTDOWN - unsolicited window closes received from all windows (either a system error has occurred, or the theatre is out of tickets);  tracker initiating system shutdown\n")
 						close(chStopWin) // propagate shutdown to anyplace that still doesn't know about it
 					}
 				} else {
@@ -720,7 +720,7 @@ func makeSale(chTracker chan interface{}, chCafeteria chan xchData, iWindow int,
 	L.Printf("makeSale for window %d tracker notification sent.\n", iWindow)
 	L.Printf("makeSale for window %d receipt:\n%+v\nTickets:\n", iWindow, responseData.Rcpt)
 	for _, t := range responseData.Ticks {
-		L.Printf("\tticket:  %+v\n", t)
+		L.Printf("\tticket:\n%s\n", t.String())
 		if t.Goodies {
 			exchangeIt := rand.Intn(10)%2 == 0 // even -> true = try to exchange the water, odd -> false = keep it
 			if exchangeIt {
